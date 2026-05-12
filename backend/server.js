@@ -3,7 +3,12 @@ const fs = require("fs")
 const express = require("express")
 const cors = require("cors")
 const multer = require("multer")
+const { rateLimit } = require("express-rate-limit")
 const { isOcrCandidate, extractTextFromImage } = require("./ocr")
+const { classifyDocument } = require("./classification/classifyDocument")
+const { extractFields } = require("./normalization/extractFields")
+const { generateDocumentId } = require("./normalization/generateIds")
+const { buildTransactionRows } = require("./normalization/buildTransactionRows")
 const {
   saveUploadRecord,
   listUploadRecords,
@@ -94,6 +99,14 @@ app.get("/", (_req, res) => {
   })
 })
 
+const uploadLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  limit: 20,
+  standardHeaders: "draft-8",
+  legacyHeaders: false,
+  message: { success: false, message: "Too many uploads. Try again in a minute." },
+})
+
 /**
  * POST /api/upload — save files, then OCR any images.
  *
@@ -104,7 +117,7 @@ app.get("/", (_req, res) => {
  *    and include the extracted text as `ocrText` in that file's response entry.
  *    Non-image files get `ocrText: null` so the shape is always the same.
  */
-app.post("/api/upload", (req, res, next) => {
+app.post("/api/upload", uploadLimiter, (req, res, next) => {
   upload.array("files", MAX_FILES_PER_UPLOAD)(req, res, async (err) => {
     if (err) return next(err)
     const files = req.files
@@ -123,13 +136,29 @@ app.post("/api/upload", (req, res, next) => {
           ? await extractTextFromImage(filePath)
           : null
 
+        const classification = classifyDocument(ocrText)
+        const structuredData = extractFields(ocrText, classification.category)
+        const documentId = generateDocumentId()
+        const transactions = buildTransactionRows({
+          documentId,
+          sourceFile: f.filename,
+          originalName: f.originalname,
+          category: classification.category,
+          confidence: classification.confidence,
+          ocrText,
+          structuredData,
+        })
+
         return {
+          documentId,
           originalName: f.originalname,
           storedName: f.filename,
           size: f.size,
-          // `ocrText` is a string when OCR ran (may be empty if no text found),
-          // or null for PDFs and text files where OCR is not applicable.
           ocrText,
+          ...classification,
+          structuredData,
+          transactions,
+          transactionCount: transactions.length,
         }
       }),
     )
@@ -138,19 +167,40 @@ app.post("/api/upload", (req, res, next) => {
     await Promise.all(
       fileInfos.map((info) =>
         saveUploadRecord({
+          documentId: info.documentId,
           storedName: info.storedName,
           originalName: info.originalName,
           size: info.size,
           ocrText: info.ocrText,
+          category: info.category,
+          confidence: info.confidence,
+          matchedKeywords: info.matchedKeywords,
+          structuredData: info.structuredData,
+          transactions: info.transactions,
+          transactionCount: info.transactionCount,
         }),
       ),
     )
 
+    // After saving, reload all records so duplicateCount reflects the global state.
+    const allRecords = await listUploadRecords()
+    const txnCountMap = new Map(
+      allRecords.flatMap((r) => (r.transactions ?? []).map((tx) => [tx.transactionId, tx.duplicateCount ?? 1])),
+    )
+
+    const enrichedFileInfos = fileInfos.map((info) => ({
+      ...info,
+      transactions: info.transactions.map((tx) => ({
+        ...tx,
+        duplicateCount: txnCountMap.get(tx.transactionId) ?? 1,
+      })),
+    }))
+
     return res.status(200).json({
       success: true,
       message: `Saved ${files.length} file(s) to the uploads folder.`,
-      filenames: fileInfos.map((info) => info.storedName),
-      files: fileInfos,
+      filenames: enrichedFileInfos.map((info) => info.storedName),
+      files: enrichedFileInfos,
     })
   })
 })

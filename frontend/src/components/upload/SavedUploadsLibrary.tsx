@@ -1,5 +1,9 @@
 import { formatFileSize } from './constants'
 import type { SavedUploadRecord } from '../../api/uploadsLibrary'
+import { DocumentCategoryBadge } from './DocumentCategoryBadge'
+import { ClassificationConfidence } from './ClassificationConfidence'
+import { MatchedKeywordsDebug } from './MatchedKeywordsDebug'
+import { StructuredDataCard } from './StructuredDataCard'
 
 export type SavedUploadsLibraryProps = {
   records: SavedUploadRecord[]
@@ -8,10 +12,6 @@ export type SavedUploadsLibraryProps = {
   onRefresh: () => void
 }
 
-/**
- * Shows everything the server has persisted for past uploads (including OCR).
- * Data comes from GET /api/uploads, not from the in-memory last upload only.
- */
 export function SavedUploadsLibrary({
   records,
   loading,
@@ -77,6 +77,7 @@ export function SavedUploadsLibrary({
         <ul className="divide-y divide-zinc-100 dark:divide-zinc-800">
           {records.map((row) => (
             <li key={row.storedName} className="px-5 py-4">
+              {/* Name + timestamp */}
               <div className="flex flex-col gap-1 sm:flex-row sm:items-baseline sm:justify-between">
                 <p className="font-medium text-zinc-900 dark:text-zinc-100">
                   {row.originalName}
@@ -88,9 +89,20 @@ export function SavedUploadsLibrary({
                   {new Date(row.savedAt).toLocaleString()}
                 </time>
               </div>
-              <p className="mt-1 font-mono text-xs text-zinc-500 dark:text-zinc-500">
-                {row.storedName} · {formatFileSize(row.size)}
-              </p>
+
+              {/* Stored name + size + classification */}
+              <div className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1.5">
+                <p className="font-mono text-xs text-zinc-500 dark:text-zinc-500">
+                  {row.storedName} · {formatFileSize(row.size)}
+                </p>
+                <DocumentCategoryBadge category={row.category ?? 'uncategorized'} />
+                <ClassificationConfidence confidence={row.confidence} />
+              </div>
+
+              <StructuredDataCard structuredData={row.structuredData} />
+              <MatchedKeywordsDebug matchedKeywords={row.matchedKeywords} />
+
+              {/* OCR text panel */}
               {row.ocrText !== null && (
                 <div className="mt-3 rounded-lg border border-zinc-200/80 bg-zinc-50/80 p-3 dark:border-zinc-700 dark:bg-zinc-950/50">
                   <p className="text-xs font-semibold uppercase tracking-wide text-zinc-500 dark:text-zinc-400">

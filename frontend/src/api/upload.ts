@@ -11,8 +11,59 @@
 
 import { MAX_FILES_PER_UPLOAD } from '../components/upload/constants'
 
+/** One purchase/transaction entry extracted from a document (summary, inside structuredData). */
+export type Transaction = {
+  merchant: string
+  amount: number
+  currency: string | null
+  rawOcrText: string | null
+}
+
+/** Normalized financial fields extracted from OCR text by the normalization pipeline. */
+export type StructuredData = {
+  merchant: string | null
+  amount: number | null
+  currency: string | null
+  /** ISO 8601 date string (YYYY-MM-DD), or null if no date was found. */
+  date: string | null
+  referenceNumber: string | null
+  /**
+   * Transactions extracted from the document.
+   * SOA: all purchases found in the screenshot (multi-row).
+   * Receipt/invoice: the single purchase, or [] if merchant/amount missing.
+   * Absent on older records.
+   */
+  transactions?: Transaction[]
+}
+
+/** A fully normalized, ledger-ready transaction row — one per purchase across all documents. */
+export type TransactionRow = {
+  transactionId: string
+  documentId: string
+  sourceFile: string
+  originalName: string
+  category: string
+  merchant: string | null
+  amount: number | null
+  currency: string | null
+  transactionDate: string | null
+  referenceNumber: string | null
+  confidenceScore: number
+  duplicateGroupId: string | null
+  rawOcrText: string | null
+  /** How many transactions across all uploads share the same merchant/amount/date/category. 1 = unique. */
+  duplicateCount: number
+  /** Raw numeric value OCR produced before any decimal correction. null for non-SOA rows. */
+  originalOcrAmount: number | null
+  /** 0.0–1.0 confidence in the corrected amount value. null for non-SOA rows. */
+  amountConfidence: number | null
+  /** True when the same merchant+amount appeared more than once in the OCR scan (adjacent OCR duplicate). */
+  duplicateFlag: boolean
+}
+
 /** One row from the server after a file is written under `backend/uploads/`. */
 export type UploadedFileInfo = {
+  documentId: string
   originalName: string
   storedName: string
   size: number
@@ -22,6 +73,21 @@ export type UploadedFileInfo = {
    * - `null`    — file is not an image (PDF, text, etc.), so OCR was skipped.
    */
   ocrText: string | null
+  /** Classification label assigned by keyword scoring (e.g. "receipt", "soa", "invoice", "uncategorized"). */
+  category: string
+  /** Fraction of category keywords matched (0–1). 0 means no match / uncategorized. */
+  confidence: number
+  /** Keywords that contributed to the classification result, grouped by signal type. */
+  matchedKeywords: {
+    primary: string[]
+    secondary: string[]
+    negative: string[]
+  }
+  /** Normalized financial fields extracted from OCR text. All fields are null when extraction fails. */
+  structuredData: StructuredData
+  /** Flat normalized transaction rows — one per purchase (SOA expands to multiple). */
+  transactions: TransactionRow[]
+  transactionCount: number
 }
 
 export type UploadApiSuccess = {

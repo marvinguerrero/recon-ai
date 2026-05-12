@@ -11,6 +11,7 @@
 
 const path = require("path")
 const fs = require("fs/promises")
+const { annotateDuplicates } = require("./deduplication/detectDuplicateTransactions")
 
 const UPLOAD_DIR = path.join(__dirname, "uploads")
 const META_DIR = path.join(UPLOAD_DIR, ".meta")
@@ -21,10 +22,38 @@ async function ensureMetaDir() {
 
 /**
  * @param {{
+ *   documentId: string
  *   storedName: string
  *   originalName: string
  *   size: number
  *   ocrText: string | null
+ *   category: string
+ *   confidence: number
+ *   matchedKeywords: { primary: string[], secondary: string[], negative: string[] }
+ *   structuredData: {
+ *     merchant: string|null
+ *     amount: number|null
+ *     currency: string|null
+ *     date: string|null
+ *     referenceNumber: string|null
+ *     transactions: Array<{ merchant: string, amount: number, currency: string|null, rawOcrText: string|null }>
+ *   }
+ *   transactions: Array<{
+ *     transactionId: string
+ *     documentId: string
+ *     sourceFile: string
+ *     originalName: string
+ *     category: string
+ *     merchant: string|null
+ *     amount: number|null
+ *     currency: string|null
+ *     transactionDate: string|null
+ *     referenceNumber: string|null
+ *     confidenceScore: number
+ *     duplicateGroupId: string|null
+ *     rawOcrText: string|null
+ *   }>
+ *   transactionCount: number
  * }} record
  */
 async function saveUploadRecord(record) {
@@ -38,7 +67,6 @@ async function saveUploadRecord(record) {
   await fs.writeFile(filePath, JSON.stringify(payload, null, 2), "utf8")
 }
 
-/** @returns {Promise<Array<{ storedName: string, originalName: string, size: number, ocrText: string | null, savedAt: string }>>} */
 async function listUploadRecords() {
   try {
     const names = await fs.readdir(META_DIR)
@@ -50,7 +78,18 @@ async function listUploadRecords() {
       }),
     )
     rows.sort((a, b) => String(b.savedAt).localeCompare(String(a.savedAt)))
-    return rows
+
+    // Compute duplicateCount across all transactions globally (derived, not stored).
+    const allTxns = rows.flatMap((r) => r.transactions ?? [])
+    const annotated = annotateDuplicates(allTxns)
+
+    // Map transactionId → annotated row for O(1) lookup.
+    const txnMap = new Map(annotated.map((tx) => [tx.transactionId, tx]))
+
+    return rows.map((record) => ({
+      ...record,
+      transactions: (record.transactions ?? []).map((tx) => txnMap.get(tx.transactionId) ?? tx),
+    }))
   } catch (err) {
     if (err.code === "ENOENT") return []
     throw err

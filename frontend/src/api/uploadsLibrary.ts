@@ -5,12 +5,30 @@
  * (see `uploadMeta.js` on the server).
  */
 
+import type { StructuredData, TransactionRow } from './upload'
+
 export type SavedUploadRecord = {
+  documentId?: string
   storedName: string
   originalName: string
   size: number
   ocrText: string | null
   savedAt: string
+  /** Classification label assigned by keyword scoring. */
+  category: string
+  /** Fraction of category keywords matched (0–1). May be absent on records saved before this field was added. */
+  confidence: number
+  /** Keywords that contributed to the classification result. Absent on records saved before this field was added. */
+  matchedKeywords?: {
+    primary: string[]
+    secondary: string[]
+    negative: string[]
+  }
+  /** Normalized financial fields. Absent on records saved before this field was added. */
+  structuredData?: StructuredData
+  /** Flat normalized transaction rows. Absent on records saved before this field was added. */
+  transactions?: TransactionRow[]
+  transactionCount?: number
 }
 
 function apiOrigin(): string {
