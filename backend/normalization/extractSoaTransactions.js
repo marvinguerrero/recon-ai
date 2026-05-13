@@ -49,14 +49,23 @@ function makeGroupId(key) {
 }
 
 /**
- * Strip UI chrome artifacts that OCR picks up from bank app screenshots:
- *   - "BSB BN" — branch sort-code label shown beside every merchant row
- *   - Trailing 1-2 char uppercase/mixed-case tokens — chevron/icon OCR noise (V, Vv, Ad…)
+ * Strip UI chrome artifacts that OCR picks up from bank app screenshots.
+ * Only removes the explicit known tokens below — no generic 1-2 char stripping
+ * to avoid corrupting legitimate short merchant suffixes (e.g. "Co", "SA").
+ *
+ * Removed tokens:
+ *   BSB BN … — branch sort-code label + everything trailing it
+ *   Vv, v, V  — dropdown arrow / chevron OCR artifacts
+ *   Ad        — advertisement icon artifact
+ *   BN, BSB   — standalone branch label fragments
+ *
+ * Before: "GUARDIAN PHARMACY YAYA BSB BN Ad" → "GUARDIAN PHARMACY YAYA"
+ * Before: "ENTREK (B) SDN BHD BSB BN Vv"    → "ENTREK (B) SDN BHD"
  */
 function cleanMerchantName(raw) {
   return raw
     .replace(/\s+BSB\s+BN\b.*/i, '')
-    .replace(/\s+[A-Za-z]{1,2}$/, '')
+    .replace(/\s+(?:Vv|Ad|BN|BSB|v|V)\s*$/, '')
     .trim()
 }
 

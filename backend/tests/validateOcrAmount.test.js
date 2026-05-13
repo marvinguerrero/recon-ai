@@ -175,6 +175,37 @@ test('empty string: returns null', () => {
   assert.equal(r.confidence, 0)
 })
 
+// ─── Range validation ─────────────────────────────────────────────────────────
+// When the best decimal candidate falls outside [min*0.1, max*10] of the context
+// range, confidence drops to 0.45 regardless of how close it was to the median.
+
+test('out-of-range result: "9999999" + context [300,400,500] → best is 9999.999 > hi(5000), conf 0.45', () => {
+  // d=1 → 999999.9, d=2 → 99999.99, d=3 → 9999.999 (closest to median 400)
+  // All three are > max(context)*10 = 5000 → out of range → ambiguous
+  const r = validateOcrAmount('Amount PHP 9999999', [300, 400, 500])
+  assert.ok(r.confidence <= 0.45, `expected confidence ≤ 0.45, got ${r.confidence}`)
+  assert.equal(r.needsReview, true)
+})
+
+test('in-range result: "40211" + context [300,400,500] → 402.11 in [30,5000], conf 0.70', () => {
+  // Matches the prompt example "40211 → 402.11" (OCR dropped the decimal point)
+  // Before: blind d=2 → 402.11, confidence 0.55
+  // After:  contextual d=2 → 402.11, in range [30, 5000] → confidence 0.70
+  const r = validateOcrAmount('Amount PHP 40211', [300, 400, 500])
+  assert.equal(r.correctedAmount, 402.11)
+  assert.equal(r.confidence, 0.70)
+  assert.equal(r.originalOcrAmount, 40211)
+})
+
+test('space-decimal "1,744 11" → 1744.11: prompt example confirmed, conf 0.9', () => {
+  // Prompt example: "1,744 11 → 1744.11"
+  // OCR split the decimal with a space; fixSpacedDecimal joins it.
+  const r = validateOcrAmount('Amount PHP 1,744 11')
+  assert.equal(r.correctedAmount, 1744.11)
+  assert.equal(r.confidence, 0.9)
+  assert.equal(r.needsReview, false)
+})
+
 // ─── Invariants ────────────────────────────────────────────────────────────────
 
 test('valid amounts are never modified regardless of context', () => {

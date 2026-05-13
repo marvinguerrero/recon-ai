@@ -48,12 +48,33 @@ function parseToken(tok) {
 }
 
 /**
+ * Return true when value falls within the observed range of context amounts,
+ * using a generous envelope (10× lower, 10× upper) to allow for outliers.
+ * Always returns true when context is empty (no basis for rejection).
+ *
+ * @param {number} value
+ * @param {number[]} amounts
+ * @returns {boolean}
+ */
+function isWithinRange(value, amounts) {
+  if (!amounts || amounts.length === 0) return true
+  const lo = Math.min(...amounts) * 0.1
+  const hi = Math.max(...amounts) * 10
+  return value >= lo && value <= hi
+}
+
+/**
  * Use the median of nearby validated amounts to choose the most plausible decimal
  * placement for a digit string that has no decimal point.
  *
  * Tries placements d = 1, 2, 3 decimal places.
- * Picks the value closest to the context median.
+ * Picks the value closest to the context median, then validates it against the
+ * observed range. A result outside [min*0.1, max*10] is flagged as ambiguous.
  * Falls back to blind last-2 (d=2) when context is empty or all placements yield < 1.00.
+ *
+ * Before/after with range validation, context [300, 400, 500]:
+ *   "40211" → d=2 → 402.11, in range [30, 5000] → confidence 0.70  (unchanged)
+ *   "9999999" → best d=3 → 9999.999, outside hi (5000) → confidence 0.45 (out of range)
  *
  * @param {string} digits — digit string with commas already removed, length > 2
  * @param {number[]} contextAmounts — validated amounts from other lines in the same document
@@ -84,6 +105,12 @@ function inferDecimalPlacement(digits, contextAmounts) {
 
   candidates.sort((a, b) => a.distance - b.distance)
   const best = candidates[0]
+
+  // Validate against the observed range. Out-of-range results are ambiguous even
+  // if they were the closest candidate to the median.
+  if (!isWithinRange(best.value, contextAmounts)) {
+    return { value: best.value, confidence: 0.45 }
+  }
 
   // Standard 2-decimal wins slightly higher confidence than non-standard placements.
   return {
