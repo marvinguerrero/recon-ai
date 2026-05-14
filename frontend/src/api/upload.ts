@@ -10,7 +10,7 @@
  */
 
 import { MAX_FILES_PER_UPLOAD } from '../components/upload/constants'
-import { apiUrl } from './client'
+import { apiUrl } from '../lib/api'
 
 /** One purchase/transaction entry extracted from a document (summary, inside structuredData). */
 export type Transaction = {

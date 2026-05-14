@@ -4,7 +4,7 @@
  */
 
 import type { StructuredData, TransactionRow } from './upload'
-import { apiUrl } from './client'
+import { apiUrl } from '../lib/api'
 
 export type SavedUploadRecord = {
   documentId?: string
