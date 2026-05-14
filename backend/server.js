@@ -1,5 +1,17 @@
 require("dotenv").config()
 
+// Fail fast if critical credentials are missing — surface the problem at boot,
+// not on the first request.
+;(function validateEnv() {
+  const required = ["SUPABASE_URL", "SUPABASE_SERVICE_ROLE_KEY"]
+  const missing = required.filter((k) => !process.env[k])
+  if (missing.length > 0) {
+    console.error(`[startup] Missing required env vars: ${missing.join(", ")}`)
+    console.error("[startup] Copy backend/.env.example → backend/.env and fill in the values.")
+    process.exit(1)
+  }
+})()
+
 const path = require("path")
 const fs = require("fs")
 const express = require("express")
@@ -127,92 +139,106 @@ app.post("/api/upload", uploadLimiter, (req, res, next) => {
       })
     }
 
-    // Process each file: OCR + Supabase Storage upload run in parallel.
-    const fileInfos = await Promise.all(
-      files.map(async (f) => {
-        const filePath = path.join(UPLOAD_DIR, f.filename)
-        const documentId = generateDocumentId()
+    try {
+      console.log(`[upload] start — ${files.length} file(s)`)
 
-        // OCR (image → text) and cloud storage upload run concurrently.
-        const [ocrText, storagePath] = await Promise.all([
-          isOcrCandidate(f.filename) ? extractTextFromImage(filePath) : Promise.resolve(null),
-          uploadFile(filePath, documentId, f.filename),
-        ])
+      // Process each file: OCR + Supabase Storage upload run in parallel.
+      const fileInfos = await Promise.all(
+        files.map(async (f) => {
+          const filePath = path.join(UPLOAD_DIR, f.filename)
+          const documentId = generateDocumentId()
 
-        // Remove the local temp file once it is safely in cloud storage.
-        if (storagePath) {
-          fs.promises.unlink(filePath).catch((e) =>
-            console.warn("[cleanup] could not delete temp file:", e.message),
-          )
-        }
+          console.log(`[upload] ocr+storage → ${f.originalname}`)
+          // OCR (image → text) and cloud storage upload run concurrently.
+          const [ocrText, storagePath] = await Promise.all([
+            isOcrCandidate(f.filename) ? extractTextFromImage(filePath) : Promise.resolve(null),
+            uploadFile(filePath, documentId, f.filename),
+          ])
+          console.log(`[upload] ocr+storage done — storagePath=${storagePath ?? "null"} ocrLen=${ocrText?.length ?? "null"}`)
 
-        const classification = classifyDocument(ocrText)
-        const structuredData = extractFields(ocrText, classification.category)
-        const transactions = buildTransactionRows({
-          documentId,
-          sourceFile: f.filename,
-          originalName: f.originalname,
-          category: classification.category,
-          confidence: classification.confidence,
-          ocrText,
-          structuredData,
-        })
+          // Remove the local temp file once it is safely in cloud storage.
+          if (storagePath) {
+            fs.promises.unlink(filePath).catch((e) =>
+              console.warn("[cleanup] could not delete temp file:", e.message),
+            )
+          }
 
-        return {
-          documentId,
-          originalName: f.originalname,
-          storedName: f.filename,
-          size: f.size,
-          ocrText,
-          storagePath,
-          ...classification,
-          structuredData,
-          transactions,
-          transactionCount: transactions.length,
-        }
-      }),
-    )
+          const classification = classifyDocument(ocrText)
+          const structuredData = extractFields(ocrText, classification.category)
+          const transactions = buildTransactionRows({
+            documentId,
+            sourceFile: f.filename,
+            originalName: f.originalname,
+            category: classification.category,
+            confidence: classification.confidence,
+            ocrText,
+            structuredData,
+          })
 
-    // Persist each document + transactions to Supabase PostgreSQL.
-    await Promise.all(
-      fileInfos.map((info) =>
-        saveUploadRecord({
-          documentId: info.documentId,
-          storedName: info.storedName,
-          originalName: info.originalName,
-          size: info.size,
-          ocrText: info.ocrText,
-          category: info.category,
-          confidence: info.confidence,
-          matchedKeywords: info.matchedKeywords,
-          structuredData: info.structuredData,
-          transactions: info.transactions,
-          transactionCount: info.transactionCount,
-          storagePath: info.storagePath,
+          return {
+            documentId,
+            originalName: f.originalname,
+            storedName: f.filename,
+            size: f.size,
+            ocrText,
+            storagePath,
+            ...classification,
+            structuredData,
+            transactions,
+            transactionCount: transactions.length,
+          }
         }),
-      ),
-    )
+      )
 
-    // After saving, reload all records so duplicateCount reflects the global state.
-    const allRecords = await listUploadRecords()
-    const txnCountMap = new Map(
-      allRecords.flatMap((r) => (r.transactions ?? []).map((tx) => [tx.transactionId, tx.duplicateCount ?? 1])),
-    )
+      // Persist each document + transactions to Supabase PostgreSQL.
+      console.log(`[upload] db insert — ${fileInfos.length} document(s)`)
+      await Promise.all(
+        fileInfos.map((info) =>
+          saveUploadRecord({
+            documentId: info.documentId,
+            storedName: info.storedName,
+            originalName: info.originalName,
+            size: info.size,
+            ocrText: info.ocrText,
+            category: info.category,
+            confidence: info.confidence,
+            matchedKeywords: info.matchedKeywords,
+            structuredData: info.structuredData,
+            transactions: info.transactions,
+            transactionCount: info.transactionCount,
+            storagePath: info.storagePath,
+          }),
+        ),
+      )
+      console.log(`[upload] db insert done`)
 
-    const enrichedFileInfos = fileInfos.map((info) => ({
-      ...info,
-      transactions: info.transactions.map((tx) => ({
-        ...tx,
-        duplicateCount: txnCountMap.get(tx.transactionId) ?? 1,
-      })),
-    }))
+      // After saving, reload all records so duplicateCount reflects the global state.
+      console.log(`[upload] reloading records for duplicate counts`)
+      const allRecords = await listUploadRecords()
+      const txnCountMap = new Map(
+        allRecords.flatMap((r) => (r.transactions ?? []).map((tx) => [tx.transactionId, tx.duplicateCount ?? 1])),
+      )
 
-    return res.status(200).json({
-      success: true,
-      message: `Saved ${files.length} file(s).`,
-      filenames: enrichedFileInfos.map((info) => info.storedName),
-      files: enrichedFileInfos,
-    })
+      const enrichedFileInfos = fileInfos.map((info) => ({
+        ...info,
+        transactions: info.transactions.map((tx) => ({
+          ...tx,
+          duplicateCount: txnCountMap.get(tx.transactionId) ?? 1,
+        })),
+      }))
+
+      console.log(`[upload] complete — responding 200`)
+      return res.status(200).json({
+        success: true,
+        message: `Saved ${files.length} file(s).`,
+        filenames: enrichedFileInfos.map((info) => info.storedName),
+        files: enrichedFileInfos,
+      })
+    } catch (asyncErr) {
+      console.error("[upload] FAILED:", asyncErr.message)
+      console.error(asyncErr.stack)
+      return next(asyncErr)
+    }
   })
 })
 

@@ -11,6 +11,8 @@
  */
 
 const { createClient } = require('@supabase/supabase-js')
+// Node.js < 22 has no native WebSocket — required by @supabase/supabase-js Realtime.
+const ws = require('ws')
 
 let _client = null
 
@@ -33,6 +35,7 @@ function getSupabaseClient() {
       persistSession: false,
       detectSessionInUrl: false,
     },
+    realtime: { transport: ws },
   })
 
   return _client
