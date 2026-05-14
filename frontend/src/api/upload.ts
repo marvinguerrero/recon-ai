@@ -10,6 +10,7 @@
  */
 
 import { MAX_FILES_PER_UPLOAD } from '../components/upload/constants'
+import { apiUrl } from './client'
 
 /** One purchase/transaction entry extracted from a document (summary, inside structuredData). */
 export type Transaction = {
@@ -98,14 +99,6 @@ export type UploadApiSuccess = {
   files: UploadedFileInfo[]
 }
 
-function uploadUrl(): string {
-  const base = import.meta.env.VITE_API_BASE_URL
-  if (typeof base === 'string' && base.length > 0) {
-    return `${base.replace(/\/$/, '')}/api/upload`
-  }
-  return '/api/upload'
-}
-
 export async function uploadFiles(
   files: File[],
 ): Promise<UploadApiSuccess> {
@@ -124,7 +117,7 @@ export async function uploadFiles(
     formData.append('files', file)
   }
 
-  const res = await fetch(uploadUrl(), {
+  const res = await fetch(apiUrl('/api/upload'), {
     method: 'POST',
     body: formData,
   })

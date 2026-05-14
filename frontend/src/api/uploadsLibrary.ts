@@ -1,11 +1,10 @@
 /**
  * Fetches persisted upload + OCR metadata from the Express API.
- *
- * Data is written under `backend/uploads/.meta/` when files are uploaded
- * (see `uploadMeta.js` on the server).
+ * Data is stored in Supabase PostgreSQL (documents + transactions tables).
  */
 
 import type { StructuredData, TransactionRow } from './upload'
+import { apiUrl } from './client'
 
 export type SavedUploadRecord = {
   documentId?: string
@@ -37,19 +36,9 @@ export type SavedUploadRecord = {
   storagePath?: string | null
 }
 
-function apiOrigin(): string {
-  const base = import.meta.env.VITE_API_BASE_URL
-  if (typeof base === 'string' && base.length > 0) {
-    return base.replace(/\/$/, '')
-  }
-  return ''
-}
-
 /** GET /api/uploads — newest uploads first. */
 export async function fetchUploadLibrary(): Promise<SavedUploadRecord[]> {
-  const prefix = apiOrigin()
-  const url = prefix ? `${prefix}/api/uploads` : '/api/uploads'
-  const res = await fetch(url)
+  const res = await fetch(apiUrl('/api/uploads'))
   const data: unknown = await res.json().catch(() => ({}))
 
   if (!res.ok) {
@@ -82,9 +71,7 @@ export async function fetchUploadByStoredName(
   storedName: string,
 ): Promise<SavedUploadRecord> {
   const enc = encodeURIComponent(storedName)
-  const prefix = apiOrigin()
-  const url = prefix ? `${prefix}/api/uploads/${enc}` : `/api/uploads/${enc}`
-  const res = await fetch(url)
+  const res = await fetch(apiUrl(`/api/uploads/${enc}`))
   const data: unknown = await res.json().catch(() => ({}))
 
   if (!res.ok) {
