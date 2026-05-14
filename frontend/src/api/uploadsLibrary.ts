@@ -29,6 +29,12 @@ export type SavedUploadRecord = {
   /** Flat normalized transaction rows. Absent on records saved before this field was added. */
   transactions?: TransactionRow[]
   transactionCount?: number
+  /**
+   * Supabase Storage path for the original file (e.g. "doc_abc/filename.jpg").
+   * Null for records saved before cloud storage was enabled.
+   * Use GET /api/uploads/:storedName/url to obtain a signed URL for viewing.
+   */
+  storagePath?: string | null
 }
 
 function apiOrigin(): string {

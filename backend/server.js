@@ -1,3 +1,5 @@
+require("dotenv").config()
+
 const path = require("path")
 const fs = require("fs")
 const express = require("express")
@@ -9,11 +11,8 @@ const { classifyDocument } = require("./classification/classifyDocument")
 const { extractFields } = require("./normalization/extractFields")
 const { generateDocumentId } = require("./normalization/generateIds")
 const { buildTransactionRows } = require("./normalization/buildTransactionRows")
-const {
-  saveUploadRecord,
-  listUploadRecords,
-  getUploadRecord,
-} = require("./uploadMeta")
+const { saveUploadRecord, listUploadRecords, getUploadRecord } = require("./uploadMeta")
+const { uploadFile, getSignedUrl } = require("./storage")
 
 const app = express()
 
@@ -128,17 +127,27 @@ app.post("/api/upload", uploadLimiter, (req, res, next) => {
       })
     }
 
-    // Run OCR on every image file in parallel — non-images get null immediately.
+    // Process each file: OCR + Supabase Storage upload run in parallel.
     const fileInfos = await Promise.all(
       files.map(async (f) => {
         const filePath = path.join(UPLOAD_DIR, f.filename)
-        const ocrText = isOcrCandidate(f.filename)
-          ? await extractTextFromImage(filePath)
-          : null
+        const documentId = generateDocumentId()
+
+        // OCR (image → text) and cloud storage upload run concurrently.
+        const [ocrText, storagePath] = await Promise.all([
+          isOcrCandidate(f.filename) ? extractTextFromImage(filePath) : Promise.resolve(null),
+          uploadFile(filePath, documentId, f.filename),
+        ])
+
+        // Remove the local temp file once it is safely in cloud storage.
+        if (storagePath) {
+          fs.promises.unlink(filePath).catch((e) =>
+            console.warn("[cleanup] could not delete temp file:", e.message),
+          )
+        }
 
         const classification = classifyDocument(ocrText)
         const structuredData = extractFields(ocrText, classification.category)
-        const documentId = generateDocumentId()
         const transactions = buildTransactionRows({
           documentId,
           sourceFile: f.filename,
@@ -155,6 +164,7 @@ app.post("/api/upload", uploadLimiter, (req, res, next) => {
           storedName: f.filename,
           size: f.size,
           ocrText,
+          storagePath,
           ...classification,
           structuredData,
           transactions,
@@ -163,7 +173,7 @@ app.post("/api/upload", uploadLimiter, (req, res, next) => {
       }),
     )
 
-    // Persist each row so GET /api/uploads can load history later (not only in memory).
+    // Persist each document + transactions to Supabase PostgreSQL.
     await Promise.all(
       fileInfos.map((info) =>
         saveUploadRecord({
@@ -178,6 +188,7 @@ app.post("/api/upload", uploadLimiter, (req, res, next) => {
           structuredData: info.structuredData,
           transactions: info.transactions,
           transactionCount: info.transactionCount,
+          storagePath: info.storagePath,
         }),
       ),
     )
@@ -198,7 +209,7 @@ app.post("/api/upload", uploadLimiter, (req, res, next) => {
 
     return res.status(200).json({
       success: true,
-      message: `Saved ${files.length} file(s) to the uploads folder.`,
+      message: `Saved ${files.length} file(s).`,
       filenames: enrichedFileInfos.map((info) => info.storedName),
       files: enrichedFileInfos,
     })
@@ -207,13 +218,38 @@ app.post("/api/upload", uploadLimiter, (req, res, next) => {
 
 /**
  * GET /api/uploads — all saved upload records (newest first), including `ocrText`.
- * Data is read from `backend/uploads/.meta/*.json` (see `uploadMeta.js`).
+ * Data is read from Supabase PostgreSQL (documents + transactions tables).
  */
 app.get("/api/uploads", async (_req, res, next) => {
   try {
     const uploads = await listUploadRecords()
     return res.status(200).json({ success: true, uploads })
   } catch (err) {
+    return next(err)
+  }
+})
+
+/**
+ * GET /api/uploads/:storedName/url — short-lived signed URL for a private document.
+ *
+ * The file lives in a private Supabase Storage bucket and is never publicly
+ * accessible. Call this endpoint to get a 1-hour signed URL for viewing it.
+ */
+app.get("/api/uploads/:storedName/url", async (req, res, next) => {
+  try {
+    const record = await getUploadRecord(req.params.storedName)
+    if (!record.storagePath) {
+      return res.status(404).json({
+        success: false,
+        message: "This file has no cloud storage entry. It may have been uploaded before storage was enabled.",
+      })
+    }
+    const signedUrl = await getSignedUrl(record.storagePath)
+    return res.status(200).json({ success: true, signedUrl, expiresIn: 3600 })
+  } catch (err) {
+    if (err.code === "ENOENT") {
+      return res.status(404).json({ success: false, message: "No record for that file." })
+    }
     return next(err)
   }
 })
@@ -265,6 +301,5 @@ app.use((err, _req, res, _next) => {
 const PORT = process.env.PORT || 5000
 
 app.listen(PORT, () => {
-  console.log(`Server running on port ${PORT}`)
-  console.log(`Uploads directory: ${UPLOAD_DIR}`)
+  console.log(`ReconAI backend running on port ${PORT}`)
 })
