@@ -36,11 +36,7 @@ export function SavedUploadsLibrary({
             <code className="rounded bg-zinc-200/80 px-1 py-0.5 font-mono text-[0.75rem] dark:bg-zinc-800">
               GET /api/uploads
             </code>
-            ). Each row is a JSON file under{' '}
-            <code className="rounded bg-zinc-200/80 px-1 py-0.5 font-mono text-[0.75rem] dark:bg-zinc-800">
-              backend/uploads/.meta/
-            </code>
-            .
+            ). Records are stored in Supabase PostgreSQL.
           </p>
         </div>
         <button
