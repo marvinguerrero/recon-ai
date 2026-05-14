@@ -1,5 +1,12 @@
 node_modules
+
 .env
+.env.*
+
 uploads/*
 !uploads/.gitkeep
+
+uploads/.meta/
+backend/uploads/.meta/
+
 eng.traineddata
